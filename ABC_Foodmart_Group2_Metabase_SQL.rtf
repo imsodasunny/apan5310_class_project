@@ -1,0 +1,1156 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww34000\viewh18820\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\b\fs24 \cf0 01 \'96 Active Store Financial Performance
+\f1\b0 \
+*/WITH return_by_item AS (\
+    /* Aggregate completed refunds and returned quantities by original sale item. */\
+    SELECT\
+        sale_item_id,\
+        SUM(return_quantity) AS returned_quantity,\
+        SUM(refund_amount) AS refund_amount\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+),\
+\
+store_sales AS (\
+    /* Analyze the July 1\'9626 sales cohort only. */\
+    SELECT\
+        s.store_id,\
+\
+        /* Original selling price before discounts and refunds. */\
+        SUM(si.quantity * si.unit_price) AS gross_sales,\
+\
+        /* Promotion or other line-level discounts. */\
+        SUM(COALESCE(si.discount_amount, 0)) AS discounts,\
+\
+        /* Sales after discounts but before refunds. */\
+        SUM(si.line_total) AS sales_after_discounts,\
+\
+        /* Refunds only for returns tied to these July sale items. */\
+        SUM(COALESCE(r.refund_amount, 0)) AS refunds,\
+\
+        /* Net sales after discounts and completed refunds. */\
+        SUM(si.line_total - COALESCE(r.refund_amount, 0))\
+            AS net_sales_after_returns,\
+\
+        /* COGS only for units ultimately retained by customers. */\
+        SUM(\
+            (si.quantity - COALESCE(r.returned_quantity, 0))\
+            * si.unit_cost_at_sale\
+        ) AS estimated_cogs\
+\
+    FROM sales AS s\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    LEFT JOIN return_by_item AS r\
+        ON si.sale_item_id = r.sale_item_id\
+\
+    WHERE s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+\
+    GROUP BY s.store_id\
+)\
+\
+SELECT\
+    st.store_name,\
+\
+    ROUND(COALESCE(ss.gross_sales, 0), 2) AS gross_sales,\
+    ROUND(COALESCE(ss.discounts, 0), 2) AS discounts,\
+    ROUND(COALESCE(ss.sales_after_discounts, 0), 2)\
+        AS sales_after_discounts,\
+    ROUND(COALESCE(ss.refunds, 0), 2) AS refunds,\
+    ROUND(COALESCE(ss.net_sales_after_returns, 0), 2)\
+        AS net_sales_after_returns,\
+    ROUND(COALESCE(ss.estimated_cogs, 0), 2)\
+        AS estimated_cogs,\
+\
+    ROUND(\
+        COALESCE(ss.net_sales_after_returns, 0)\
+        - COALESCE(ss.estimated_cogs, 0),\
+        2\
+    ) AS estimated_gross_profit,\
+\
+    ROUND(\
+        100.0 *\
+        (\
+            COALESCE(ss.net_sales_after_returns, 0)\
+            - COALESCE(ss.estimated_cogs, 0)\
+        )\
+        / NULLIF(COALESCE(ss.net_sales_after_returns, 0), 0),\
+        1\
+    ) AS gross_margin_pct\
+\
+FROM stores AS st\
+LEFT JOIN store_sales AS ss\
+    ON st.store_id = ss.store_id\
+\
+WHERE st.store_status = 'Active'\
+\
+ORDER BY estimated_gross_profit DESC;/*\
+\
+
+\f0\b 02 \'96 Sales Trend by Store and Date 
+\f1\b0 \
+WITH return_by_item AS (\
+    SELECT\
+        sale_item_id,\
+        SUM(refund_amount) AS refund_amount\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+)\
+\
+SELECT\
+    s.sale_datetime::date AS sale_date,\
+    st.store_name,\
+    COUNT(DISTINCT s.sale_id) AS transaction_count,\
+    ROUND(SUM(si.quantity * si.unit_price), 2) AS gross_sales,\
+    ROUND(SUM(COALESCE(si.discount_amount, 0)), 2) AS discounts,\
+    ROUND(SUM(COALESCE(r.refund_amount, 0)), 2) AS refunds,\
+    ROUND(\
+        SUM(si.line_total - COALESCE(r.refund_amount, 0)),\
+        2\
+    ) AS net_sales_after_returns,\
+    ROUND(\
+        SUM(si.line_total - COALESCE(r.refund_amount, 0))\
+        / NULLIF(COUNT(DISTINCT s.sale_id), 0),\
+        2\
+    ) AS average_net_transaction_value\
+FROM sales AS s\
+JOIN stores AS st\
+    ON s.store_id = st.store_id\
+JOIN sale_items AS si\
+    ON s.sale_id = si.sale_id\
+LEFT JOIN return_by_item AS r\
+    ON si.sale_item_id = r.sale_item_id\
+WHERE st.store_status = 'Active'\
+  AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+  AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+GROUP BY\
+    s.sale_datetime::date,\
+    st.store_name\
+ORDER BY\
+    sale_date,\
+    store_name;\
+\
+
+\f0\b 03 \'96 Category Revenue and Gross Profit Analysis (July 2026)
+\f1\b0 \
+*/WITH return_by_item AS (\
+    SELECT\
+        sale_item_id,\
+        SUM(return_quantity) AS returned_quantity,\
+        SUM(refund_amount) AS refund_amount\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+),\
+\
+category_summary AS (\
+    SELECT\
+        COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized') AS category,\
+\
+        COUNT(DISTINCT p.product_id) AS products_sold,\
+\
+        SUM(si.quantity) AS units_sold,\
+        SUM(COALESCE(r.returned_quantity, 0)) AS units_returned,\
+        SUM(si.quantity - COALESCE(r.returned_quantity, 0))\
+            AS net_units_sold,\
+\
+        SUM(si.quantity * si.unit_price) AS gross_sales,\
+        SUM(COALESCE(si.discount_amount, 0)) AS discounts,\
+        SUM(COALESCE(r.refund_amount, 0)) AS refunds,\
+\
+        SUM(si.line_total - COALESCE(r.refund_amount, 0))\
+            AS net_sales_after_returns,\
+\
+        SUM(\
+            (si.quantity - COALESCE(r.returned_quantity, 0))\
+            * si.unit_cost_at_sale\
+        ) AS estimated_cogs\
+\
+    FROM sales AS s\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    JOIN products AS p\
+        ON si.product_id = p.product_id\
+    LEFT JOIN return_by_item AS r\
+        ON si.sale_item_id = r.sale_item_id\
+\
+    WHERE st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+\
+    GROUP BY\
+        COALESCE(NULLIF(TRIM(p.category), ''), 'Uncategorized')\
+),\
+\
+category_metrics AS (\
+    SELECT\
+        *,\
+        net_sales_after_returns - estimated_cogs\
+            AS estimated_gross_profit\
+    FROM category_summary\
+)\
+\
+SELECT\
+    DENSE_RANK() OVER (\
+        ORDER BY estimated_gross_profit DESC\
+    ) AS gross_profit_rank,\
+\
+    category,\
+    products_sold,\
+    net_units_sold,\
+\
+    ROUND(gross_sales, 2) AS gross_sales,\
+    ROUND(discounts, 2) AS discounts,\
+    ROUND(refunds, 2) AS refunds,\
+    ROUND(net_sales_after_returns, 2) AS net_sales_after_returns,\
+    ROUND(estimated_cogs, 2) AS estimated_cogs,\
+    ROUND(estimated_gross_profit, 2) AS estimated_gross_profit,\
+\
+    ROUND(\
+        100.0 * estimated_gross_profit\
+        / NULLIF(net_sales_after_returns, 0),\
+        1\
+    ) AS gross_margin_pct\
+\
+FROM category_metrics\
+WHERE net_units_sold > 0\
+\
+ORDER BY\
+    estimated_gross_profit DESC,\
+    category ASC; /*\
+
+\f0\b \
+04 - Revenue Concentration by Customer Value Segment (July 2026)
+\f1\b0 \
+*/WITH return_by_item AS (\
+    \
+    SELECT\
+        sale_item_id,\
+        SUM(refund_amount) AS refund_amount\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+),\
+\
+customer_metrics AS (\
+    /* Calculate each customer's July sales-cohort value. */\
+    SELECT\
+        c.customer_id,\
+        c.loyalty_status,\
+\
+        COUNT(DISTINCT s.sale_id) AS transaction_count,\
+\
+        SUM(COALESCE(r.refund_amount, 0)) AS refunds,\
+\
+        SUM(\
+            si.line_total - COALESCE(r.refund_amount, 0)\
+        ) AS net_sales_after_returns\
+\
+    FROM customers AS c\
+    JOIN sales AS s\
+        ON c.customer_id = s.customer_id\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    LEFT JOIN return_by_item AS r\
+        ON si.sale_item_id = r.sale_item_id\
+\
+    WHERE st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+\
+    GROUP BY\
+        c.customer_id,\
+        c.loyalty_status\
+),\
+\
+customer_ranked AS (\
+    /* Divide purchasing customers into equal-sized value tiers. */\
+    SELECT\
+        *,\
+        NTILE(3) OVER (\
+            ORDER BY net_sales_after_returns DESC, customer_id\
+        ) AS value_tertile\
+    FROM customer_metrics\
+    WHERE net_sales_after_returns > 0\
+),\
+\
+segment_summary AS (\
+    SELECT\
+        value_tertile,\
+\
+        CASE\
+            WHEN value_tertile = 1 THEN 'High Value'\
+            WHEN value_tertile = 2 THEN 'Mid Value'\
+            ELSE 'Developing Value'\
+        END AS customer_value_segment,\
+\
+        COUNT(*) AS customer_count,\
+\
+        COUNT(*) FILTER (\
+            WHERE loyalty_status = 'Active'\
+        ) AS active_loyalty_customers,\
+\
+        SUM(transaction_count) AS transaction_count,\
+        SUM(refunds) AS refunds,\
+        SUM(net_sales_after_returns) AS net_sales_after_returns\
+\
+    FROM customer_ranked\
+    GROUP BY value_tertile\
+)\
+\
+SELECT\
+    customer_value_segment,\
+\
+    customer_count,\
+\
+    ROUND(\
+        100.0 * customer_count\
+        / SUM(customer_count) OVER (),\
+        1\
+    ) AS customer_share_pct,\
+\
+    active_loyalty_customers,\
+\
+    transaction_count,\
+\
+    ROUND(refunds, 2) AS refunds,\
+\
+    ROUND(\
+        net_sales_after_returns,\
+        2\
+    ) AS net_sales_after_returns,\
+\
+    ROUND(\
+        100.0 * net_sales_after_returns\
+        / NULLIF(SUM(net_sales_after_returns) OVER (), 0),\
+        1\
+    ) AS net_sales_share_pct,\
+\
+    ROUND(\
+        net_sales_after_returns\
+        / NULLIF(customer_count, 0),\
+        2\
+    ) AS average_net_sales_per_customer\
+\
+FROM segment_summary\
+\
+ORDER BY value_tertile; /*\
+\
+
+\f0\b 05 \'96 Promotion Performance by Campaign (July 2026)
+\f1\b0 \
+*/WITH return_by_item AS (\
+ \
+    SELECT\
+        sale_item_id,\
+        SUM(return_quantity) AS returned_quantity,\
+        SUM(refund_amount) AS refund_amount\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+),\
+\
+promotion_sales AS (\
+   \
+    SELECT\
+        si.promotion_id,\
+\
+        COUNT(DISTINCT s.sale_id) AS transaction_count,\
+\
+        SUM(si.quantity) AS units_sold,\
+        SUM(COALESCE(r.returned_quantity, 0)) AS units_returned,\
+        SUM(si.quantity - COALESCE(r.returned_quantity, 0))\
+            AS net_units_sold,\
+\
+        SUM(si.quantity * si.unit_price) AS gross_sales,\
+        SUM(COALESCE(si.discount_amount, 0)) AS discounts,\
+        SUM(COALESCE(r.refund_amount, 0)) AS refunds,\
+\
+        SUM(si.line_total - COALESCE(r.refund_amount, 0))\
+            AS net_sales_after_returns,\
+\
+        SUM(\
+            (si.quantity - COALESCE(r.returned_quantity, 0))\
+            * si.unit_cost_at_sale\
+        ) AS estimated_cogs\
+\
+    FROM sales AS s\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    JOIN promotions AS pm\
+        ON si.promotion_id = pm.promotion_id\
+    LEFT JOIN return_by_item AS r\
+        ON si.sale_item_id = r.sale_item_id\
+\
+    WHERE st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+      AND s.sale_datetime::date BETWEEN pm.start_date AND pm.end_date\
+\
+    GROUP BY si.promotion_id\
+)\
+\
+SELECT\
+    pm.promotion_name,\
+    p.product_name,\
+    p.category,\
+    pm.discount_type,\
+    pm.discount_value,\
+    pm.start_date,\
+    pm.end_date,\
+\
+    COALESCE(ps.transaction_count, 0) AS transaction_count,\
+    COALESCE(ps.net_units_sold, 0) AS net_units_sold,\
+\
+    ROUND(COALESCE(ps.gross_sales, 0), 2) AS gross_sales,\
+    ROUND(COALESCE(ps.discounts, 0), 2) AS discounts,\
+    ROUND(COALESCE(ps.refunds, 0), 2) AS refunds,\
+    ROUND(COALESCE(ps.net_sales_after_returns, 0), 2)\
+        AS net_sales_after_returns,\
+    ROUND(COALESCE(ps.estimated_cogs, 0), 2)\
+        AS estimated_cogs,\
+\
+    ROUND(\
+        COALESCE(ps.net_sales_after_returns, 0)\
+        - COALESCE(ps.estimated_cogs, 0),\
+        2\
+    ) AS estimated_gross_profit,\
+\
+    ROUND(\
+        100.0 * (\
+            COALESCE(ps.net_sales_after_returns, 0)\
+            - COALESCE(ps.estimated_cogs, 0)\
+        )\
+        / NULLIF(COALESCE(ps.net_sales_after_returns, 0), 0),\
+        1\
+    ) AS gross_margin_pct\
+\
+FROM promotions AS pm\
+JOIN products AS p\
+    ON pm.product_id = p.product_id\
+LEFT JOIN promotion_sales AS ps\
+    ON pm.promotion_id = ps.promotion_id\
+\
+WHERE pm.start_date <= DATE '2026-07-26'\
+  AND pm.end_date >= DATE '2026-07-01'\
+\
+ORDER BY\
+    estimated_gross_profit DESC,\
+    pm.promotion_name ASC; /*\
+\
+
+\f0\b 06 \'96 Return and Refund Risk by Product Category (July Sales Cohort)
+\f1\b0 \
+*/WITH july_category_sales AS (\
+   \
+    SELECT\
+        p.category,\
+        SUM(si.quantity) AS units_sold,\
+        SUM(si.line_total) AS sales_after_discounts\
+    FROM sales AS s\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    JOIN products AS p\
+        ON si.product_id = p.product_id\
+\
+    WHERE st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+\
+    GROUP BY p.category\
+),\
+\
+return_details AS (\
+\
+    SELECT\
+        p.category,\
+        r.return_id,\
+        r.return_quantity,\
+        r.refund_amount,\
+        r.return_reason,\
+        r.return_date - s.sale_datetime::date AS days_to_return\
+    FROM returns AS r\
+    JOIN sale_items AS si\
+        ON r.sale_item_id = si.sale_item_id\
+    JOIN sales AS s\
+        ON si.sale_id = s.sale_id\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN products AS p\
+        ON si.product_id = p.product_id\
+\
+    WHERE r.return_status = 'Completed'\
+      AND st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+),\
+\
+category_returns AS (\
+    SELECT\
+        category,\
+        COUNT(*) AS return_records,\
+        SUM(return_quantity) AS units_returned,\
+        SUM(refund_amount) AS refunds,\
+        ROUND(AVG(days_to_return), 1) AS average_days_to_return\
+    FROM return_details\
+    GROUP BY category\
+),\
+\
+reason_ranked AS (\
+    SELECT\
+        category,\
+        return_reason,\
+        COUNT(*) AS reason_count,\
+        ROW_NUMBER() OVER (\
+            PARTITION BY category\
+            ORDER BY COUNT(*) DESC, return_reason ASC\
+        ) AS reason_rank\
+    FROM return_details\
+    GROUP BY\
+        category,\
+        return_reason\
+)\
+\
+SELECT\
+    DENSE_RANK() OVER (\
+        ORDER BY COALESCE(cr.refunds, 0) DESC\
+    ) AS refund_risk_rank,\
+\
+    js.category,\
+    js.units_sold,\
+    COALESCE(cr.return_records, 0) AS return_records,\
+    COALESCE(cr.units_returned, 0) AS units_returned,\
+\
+    ROUND(\
+        100.0 * COALESCE(cr.units_returned, 0)\
+        / NULLIF(js.units_sold, 0),\
+        1\
+    ) AS return_unit_rate_pct,\
+\
+    ROUND(COALESCE(cr.refunds, 0), 2) AS refunds,\
+\
+    ROUND(\
+        100.0 * COALESCE(cr.refunds, 0)\
+        / NULLIF(js.sales_after_discounts, 0),\
+        1\
+    ) AS refund_rate_pct,\
+\
+    cr.average_days_to_return,\
+\
+    COALESCE(\
+        rr.return_reason,\
+        'No completed returns'\
+    ) AS top_return_reason\
+\
+FROM july_category_sales AS js\
+LEFT JOIN category_returns AS cr\
+    ON js.category = cr.category\
+LEFT JOIN reason_ranked AS rr\
+    ON js.category = rr.category\
+   AND rr.reason_rank = 1\
+\
+ORDER BY\
+    refund_rate_pct DESC,\
+    refunds DESC,\
+    js.category ASC; /*\
+\
+
+\f0\b 07 \'96 Inventory Reorder Risk for Active Stores (August 12 Snapshot)
+\f1\b0 \
+WITH completed_returns_by_item AS (\
+    SELECT\
+        sale_item_id,\
+        SUM(return_quantity) AS returned_quantity\
+    FROM returns\
+    WHERE return_status = 'Completed'\
+    GROUP BY sale_item_id\
+),\
+\
+july_product_demand AS (\
+    SELECT\
+        s.store_id,\
+        si.product_id,\
+        GREATEST(\
+            SUM(si.quantity - COALESCE(r.returned_quantity, 0)),\
+            0\
+        ) AS net_units_sold_july\
+    FROM sales AS s\
+    JOIN stores AS st\
+        ON s.store_id = st.store_id\
+    JOIN sale_items AS si\
+        ON s.sale_id = si.sale_id\
+    LEFT JOIN completed_returns_by_item AS r\
+        ON si.sale_item_id = r.sale_item_id\
+    WHERE st.store_status = 'Active'\
+      AND s.sale_datetime >= TIMESTAMP '2026-07-01 00:00:00'\
+      AND s.sale_datetime < TIMESTAMP '2026-07-27 00:00:00'\
+    GROUP BY\
+        s.store_id,\
+        si.product_id\
+),\
+\
+inventory_base AS (\
+    SELECT\
+        st.store_name,\
+        st.store_name || ' \'97 ' || p.product_name AS inventory_item,\
+        p.product_name,\
+        p.category,\
+        p.measure_unit,\
+        v.vendor_name,\
+        i.quantity_on_hand,\
+        i.reorder_point,\
+        i.last_updated_at,\
+        COALESCE(jpd.net_units_sold_july, 0) AS net_units_sold_july,\
+        COALESCE(jpd.net_units_sold_july, 0) / 26.0\
+            AS avg_daily_net_units_sold\
+    FROM inventory AS i\
+    JOIN stores AS st\
+        ON i.store_id = st.store_id\
+    JOIN products AS p\
+        ON i.product_id = p.product_id\
+    JOIN vendors AS v\
+        ON p.vendor_id = v.vendor_id\
+    LEFT JOIN july_product_demand AS jpd\
+        ON i.store_id = jpd.store_id\
+       AND i.product_id = jpd.product_id\
+    WHERE st.store_status = 'Active'\
+      AND p.product_status = 'ACTIVE'\
+)\
+\
+SELECT\
+    CASE\
+        WHEN quantity_on_hand = 0 THEN 'Stockout'\
+        WHEN quantity_on_hand < reorder_point THEN 'Reorder Now'\
+        WHEN quantity_on_hand = reorder_point THEN 'At Reorder Point'\
+        ELSE 'Low Days of Supply'\
+    END AS inventory_risk_status,\
+\
+    inventory_item,\
+    store_name,\
+    product_name,\
+    category,\
+    measure_unit,\
+    vendor_name,\
+\
+    ROUND(quantity_on_hand, 1) AS quantity_on_hand,\
+    ROUND(reorder_point, 1) AS reorder_point,\
+\
+    ROUND(\
+        GREATEST(reorder_point - quantity_on_hand, 0),\
+        1\
+    ) AS reorder_shortfall,\
+\
+    ROUND(net_units_sold_july, 1) AS net_units_sold_july,\
+    ROUND(avg_daily_net_units_sold, 2) AS avg_daily_net_units_sold,\
+\
+    ROUND(\
+        quantity_on_hand\
+        / NULLIF(avg_daily_net_units_sold, 0),\
+        1\
+    ) AS estimated_days_of_supply,\
+\
+    last_updated_at\
+\
+FROM inventory_base\
+\
+WHERE quantity_on_hand <= reorder_point\
+   OR (\
+        avg_daily_net_units_sold > 0\
+        AND quantity_on_hand / avg_daily_net_units_sold <= 7\
+   )\
+\
+ORDER BY\
+    CASE\
+        WHEN quantity_on_hand = 0 THEN 1\
+        WHEN quantity_on_hand < reorder_point THEN 2\
+        WHEN quantity_on_hand = reorder_point THEN 3\
+        ELSE 4\
+    END,\
+    estimated_days_of_supply ASC NULLS LAST,\
+    reorder_shortfall DESC,\
+    inventory_item ASC;\
+\
+
+\f0\b 08 - Full Purchase-Order Fulfillment Rate by Vendor
+\f1\b0 \
+WITH purchase_order_value AS (\
+    SELECT\
+        purchase_order_id,\
+        SUM(order_quantity) AS total_ordered_units,\
+        SUM(line_total) AS total_purchase_order_value\
+    FROM purchase_order_items\
+    GROUP BY purchase_order_id\
+),\
+\
+delivery_by_order AS (\
+    SELECT\
+        purchase_order_id,\
+\
+        CASE\
+            WHEN BOOL_OR(delivery_status = 'RECEIVED')\
+                THEN 'RECEIVED'\
+            WHEN BOOL_OR(delivery_status = 'PARTIALLY_RECEIVED')\
+                THEN 'PARTIALLY_RECEIVED'\
+            WHEN BOOL_OR(delivery_status = 'PENDING')\
+                THEN 'PENDING'\
+            ELSE 'OTHER'\
+        END AS delivery_status,\
+\
+        (\
+            MAX(delivery_time)\
+            FILTER (WHERE delivery_status = 'RECEIVED')\
+        )::date AS full_receipt_date\
+\
+    FROM deliveries\
+    GROUP BY purchase_order_id\
+),\
+\
+vendor_order_status AS (\
+    SELECT\
+        v.vendor_id,\
+        v.vendor_name,\
+\
+        po.purchase_order_id,\
+        po.order_date,\
+        po.expected_delivery_date,\
+\
+        st.store_name,\
+\
+        COALESCE(pov.total_ordered_units, 0)\
+            AS total_ordered_units,\
+\
+        COALESCE(pov.total_purchase_order_value, 0)\
+            AS total_purchase_order_value,\
+\
+        CASE\
+            WHEN dbo.delivery_status = 'RECEIVED'\
+                THEN 'Fully Received'\
+            WHEN dbo.delivery_status = 'PARTIALLY_RECEIVED'\
+                THEN 'Partially Received'\
+            WHEN dbo.delivery_status = 'PENDING'\
+                THEN 'Pending'\
+            ELSE 'No Delivery Record'\
+        END AS fulfillment_status,\
+\
+        dbo.full_receipt_date,\
+\
+        CASE\
+            WHEN dbo.delivery_status = 'RECEIVED'\
+             AND dbo.full_receipt_date IS NOT NULL\
+             AND po.expected_delivery_date IS NOT NULL\
+            THEN dbo.full_receipt_date - po.expected_delivery_date\
+        END AS days_vs_expected\
+\
+    FROM purchase_orders AS po\
+\
+    JOIN vendors AS v\
+        ON po.vendor_id = v.vendor_id\
+\
+    JOIN stores AS st\
+        ON po.store_id = st.store_id\
+\
+    LEFT JOIN purchase_order_value AS pov\
+        ON po.purchase_order_id = pov.purchase_order_id\
+\
+    LEFT JOIN delivery_by_order AS dbo\
+        ON po.purchase_order_id = dbo.purchase_order_id\
+\
+    WHERE st.store_status = 'Active'\
+),\
+\
+vendor_summary AS (\
+    SELECT\
+        vendor_name,\
+\
+        COUNT(*) AS purchase_order_count,\
+\
+        SUM(total_ordered_units)\
+            AS total_ordered_units,\
+\
+        SUM(total_purchase_order_value)\
+            AS total_purchase_order_value,\
+\
+        COUNT(*) FILTER (\
+            WHERE fulfillment_status = 'Fully Received'\
+        ) AS fully_received_orders,\
+\
+        COUNT(*) FILTER (\
+            WHERE fulfillment_status = 'Partially Received'\
+        ) AS partially_received_orders,\
+\
+        COUNT(*) FILTER (\
+            WHERE fulfillment_status = 'Pending'\
+        ) AS pending_orders,\
+\
+        COUNT(*) FILTER (\
+            WHERE fulfillment_status = 'Fully Received'\
+              AND days_vs_expected <= 0\
+        ) AS on_time_fully_received_orders,\
+\
+        COUNT(*) FILTER (\
+            WHERE fulfillment_status = 'Fully Received'\
+              AND days_vs_expected > 0\
+        ) AS late_fully_received_orders,\
+\
+        AVG(days_vs_expected) FILTER (\
+            WHERE fulfillment_status = 'Fully Received'\
+        ) AS average_days_vs_expected\
+\
+    FROM vendor_order_status\
+    GROUP BY vendor_name\
+)\
+\
+SELECT\
+    vendor_name,\
+\
+    purchase_order_count,\
+    total_ordered_units,\
+\
+    ROUND(total_purchase_order_value, 2)\
+        AS total_purchase_order_value,\
+\
+    fully_received_orders,\
+    partially_received_orders,\
+    pending_orders,\
+\
+    on_time_fully_received_orders,\
+    late_fully_received_orders,\
+\
+    ROUND(\
+        100.0 * fully_received_orders\
+        / NULLIF(purchase_order_count, 0),\
+        1\
+    ) AS full_fulfillment_rate_pct,\
+\
+    ROUND(\
+        100.0 * pending_orders\
+        / NULLIF(purchase_order_count, 0),\
+        1\
+    ) AS pending_order_rate_pct,\
+\
+    ROUND(\
+        100.0 * on_time_fully_received_orders\
+        / NULLIF(fully_received_orders, 0),\
+        1\
+    ) AS on_time_delivery_rate_pct,\
+\
+    ROUND(average_days_vs_expected, 1)\
+        AS average_days_vs_expected\
+\
+FROM vendor_summary\
+\
+ORDER BY\
+    full_fulfillment_rate_pct ASC NULLS LAST,\
+    pending_orders DESC,\
+    total_purchase_order_value DESC,\
+    vendor_name ASC;\
+\
+09 \'96 Scheduled Labor Cost by Store and Department(August 10-11, 2026)\
+*/WITH scheduled_shift_detail AS (\
+    SELECT\
+        st.store_id,\
+        st.store_name,\
+\
+        d.department_id,\
+        d.department_name,\
+\
+        e.employee_id,\
+        es.shift_id,\
+\
+        es.shift_start::date AS shift_date,\
+\
+        EXTRACT(\
+            EPOCH FROM (es.shift_end - es.shift_start)\
+        ) / 3600.0 AS scheduled_hours,\
+\
+        p.hourly_rate\
+\
+    FROM employee_shifts AS es\
+\
+    JOIN employees AS e\
+        ON es.employee_id = e.employee_id\
+\
+    JOIN departments AS d\
+        ON e.department_id = d.department_id\
+\
+    JOIN stores AS st\
+        ON d.store_id = st.store_id\
+\
+    JOIN positions AS p\
+        ON e.position_id = p.position_id\
+\
+    WHERE es.shift_status = 'Scheduled'\
+      AND e.employee_status = 'Active'\
+      AND st.store_status = 'Active'\
+),\
+\
+department_labor_summary AS (\
+    SELECT\
+        store_id,\
+        store_name,\
+        department_id,\
+        department_name,\
+\
+        MIN(shift_date) AS schedule_start_date,\
+        MAX(shift_date) AS schedule_end_date,\
+\
+        COUNT(*) AS scheduled_shifts,\
+        COUNT(DISTINCT employee_id) AS scheduled_employees,\
+\
+        SUM(scheduled_hours) AS scheduled_hours,\
+\
+        SUM(scheduled_hours * hourly_rate)\
+            AS scheduled_labor_cost\
+\
+    FROM scheduled_shift_detail\
+\
+    GROUP BY\
+        store_id,\
+        store_name,\
+        department_id,\
+        department_name\
+)\
+\
+SELECT\
+    store_name,\
+    department_name,\
+\
+    schedule_start_date,\
+    schedule_end_date,\
+\
+    scheduled_shifts,\
+    scheduled_employees,\
+\
+    ROUND(scheduled_hours, 2)\
+        AS scheduled_hours,\
+\
+    ROUND(scheduled_labor_cost, 2)\
+        AS scheduled_labor_cost,\
+\
+    ROUND(\
+        100.0 * scheduled_labor_cost\
+        / NULLIF(\
+            SUM(scheduled_labor_cost)\
+            OVER (PARTITION BY store_id),\
+            0\
+        ),\
+        1\
+    ) AS store_labor_cost_share_pct,\
+\
+    ROUND(\
+        scheduled_labor_cost\
+        / NULLIF(scheduled_hours, 0),\
+        2\
+    ) AS weighted_avg_hourly_rate\
+\
+FROM department_labor_summary\
+\
+ORDER BY\
+    scheduled_labor_cost DESC,\
+    store_name ASC,\
+    department_name ASC;/*\
+\
+
+\f0\b 10 \'96 Recorded Pre-Opening Expenses by Planned Brooklyn Store\
+
+\f1\b0 */WITH active_product_catalog AS (\
+    SELECT\
+        COUNT(*) AS active_catalog_sku_count\
+    FROM products\
+    WHERE product_status = 'ACTIVE'\
+),\
+\
+planned_inventory AS (\
+    SELECT\
+        i.store_id,\
+\
+        COUNT(*) AS configured_sku_count,\
+\
+        COUNT(*) FILTER (\
+            WHERE i.quantity_on_hand > 0\
+        ) AS stocked_sku_count,\
+\
+        SUM(i.quantity_on_hand) AS total_quantity_on_hand,\
+\
+        MAX(i.last_updated_at) AS inventory_snapshot_timestamp\
+\
+    FROM inventory AS i\
+    GROUP BY i.store_id\
+),\
+\
+purchase_order_line_summary AS (\
+    SELECT\
+        purchase_order_id,\
+        SUM(order_quantity) AS units_on_order,\
+        SUM(line_total) AS purchase_order_value\
+    FROM purchase_order_items\
+    GROUP BY purchase_order_id\
+),\
+\
+planned_store_purchase_orders AS (\
+    SELECT\
+        po.store_id,\
+\
+        COUNT(DISTINCT po.purchase_order_id)\
+            AS purchase_order_count,\
+\
+        COUNT(DISTINCT po.purchase_order_id) FILTER (\
+            WHERE po.order_status IN ('APPROVED', 'PARTIALLY_RECEIVED')\
+        ) AS open_purchase_order_count,\
+\
+        SUM(COALESCE(pols.units_on_order, 0))\
+            AS units_on_order,\
+\
+        SUM(COALESCE(pols.purchase_order_value, 0))\
+            AS purchase_order_value\
+\
+    FROM purchase_orders AS po\
+\
+    LEFT JOIN purchase_order_line_summary AS pols\
+        ON po.purchase_order_id = pols.purchase_order_id\
+\
+    GROUP BY po.store_id\
+),\
+\
+planned_store_expenses AS (\
+    SELECT\
+        store_id,\
+\
+        MIN(expense_date) AS first_expense_date,\
+        MAX(expense_date) AS last_expense_date,\
+\
+        SUM(\
+            CASE\
+                WHEN expense_type = 'Rent' THEN amount\
+                ELSE 0\
+            END\
+        ) AS recorded_rent_expense,\
+\
+        SUM(\
+            CASE\
+                WHEN expense_type = 'Utilities' THEN amount\
+                ELSE 0\
+            END\
+        ) AS recorded_utility_expense,\
+\
+        SUM(amount) AS recorded_preopening_expense\
+\
+    FROM operating_expenses\
+    GROUP BY store_id\
+)\
+\
+SELECT\
+    st.store_name,\
+    st.borough,\
+    st.opening_date,\
+\
+    st.opening_date - DATE '2026-08-12'\
+        AS days_until_planned_opening,\
+\
+    apc.active_catalog_sku_count,\
+\
+    COALESCE(pi.configured_sku_count, 0)\
+        AS configured_sku_count,\
+\
+    ROUND(\
+        100.0 * COALESCE(pi.configured_sku_count, 0)\
+        / NULLIF(apc.active_catalog_sku_count, 0),\
+        1\
+    ) AS assortment_configuration_pct,\
+\
+    COALESCE(pi.stocked_sku_count, 0)\
+        AS stocked_sku_count,\
+\
+    ROUND(\
+        100.0 * COALESCE(pi.stocked_sku_count, 0)\
+        / NULLIF(COALESCE(pi.configured_sku_count, 0), 0),\
+        1\
+    ) AS inventory_stocked_pct,\
+\
+    COALESCE(pi.total_quantity_on_hand, 0)\
+        AS total_quantity_on_hand,\
+\
+    pi.inventory_snapshot_timestamp,\
+\
+    COALESCE(pspo.purchase_order_count, 0)\
+        AS purchase_order_count,\
+\
+    COALESCE(pspo.open_purchase_order_count, 0)\
+        AS open_purchase_order_count,\
+\
+    COALESCE(pspo.units_on_order, 0)\
+        AS units_on_order,\
+\
+    ROUND(\
+        COALESCE(pspo.purchase_order_value, 0),\
+        2\
+    ) AS purchase_order_value,\
+\
+    pse.first_expense_date,\
+    pse.last_expense_date,\
+\
+    ROUND(\
+        COALESCE(pse.recorded_rent_expense, 0),\
+        2\
+    ) AS recorded_rent_expense,\
+\
+    ROUND(\
+        COALESCE(pse.recorded_utility_expense, 0),\
+        2\
+    ) AS recorded_utility_expense,\
+\
+    ROUND(\
+        COALESCE(pse.recorded_preopening_expense, 0),\
+        2\
+    ) AS recorded_preopening_expense,\
+\
+    CASE\
+        WHEN COALESCE(pi.configured_sku_count, 0) = 0\
+            THEN 'Not Configured'\
+\
+        WHEN COALESCE(pi.stocked_sku_count, 0) = 0\
+         AND COALESCE(pspo.purchase_order_count, 0) = 0\
+            THEN 'Critical: No Stock or Purchase Orders'\
+\
+        WHEN COALESCE(pi.stocked_sku_count, 0)\
+             < COALESCE(pi.configured_sku_count, 0)\
+            THEN 'Inventory Setup in Progress'\
+\
+        ELSE 'Inventory Ready'\
+    END AS expansion_readiness_status\
+\
+FROM stores AS st\
+\
+CROSS JOIN active_product_catalog AS apc\
+\
+LEFT JOIN planned_inventory AS pi\
+    ON st.store_id = pi.store_id\
+\
+LEFT JOIN planned_store_purchase_orders AS pspo\
+    ON st.store_id = pspo.store_id\
+\
+LEFT JOIN planned_store_expenses AS pse\
+    ON st.store_id = pse.store_id\
+\
+WHERE st.store_status = 'Planned'\
+\
+ORDER BY st.opening_date ASC;/*\
+\
+}
